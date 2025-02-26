@@ -28,7 +28,64 @@ kafka辅助功能工具组件，基于springboot + apollo + mybatis-plus依赖
 > 
 > 2、**使用前请确认是否有mybatis-plus依赖**
 
-## 动态启停消费者&调整concurrency
+##初始化
+### 1. 引入依赖
+```xml
+```
+### 2. 初始化sql脚本(若只需动态调整功能，无需该脚本)
+```sql
+-- 补偿记录表
+create table kafka_compensation_message
+(
+    `id`                            bigint unsigned  auto_increment not null comment '主键',
+    `record_headers`                varchar(2000)    default ''                null comment '消息header',
+    `record_key`                    varchar(200)     default ''                null comment '消息key',
+    `record_value`                  mediumtext                                 null comment '消息体',
+    `record_partition`              int              default 0                 not null comment '分区',
+    `record_offset`                 bigint           default -1                not null comment 'offset',
+    `record_timestamp`              bigint           default -1                not null comment 'timestamp',
+    `record_topic`                  varchar(200)     default ''                not null comment '来源topic',
+    `original_method`               varchar(200)     default ''                not null comment '业务方法uri',
+    `is_original_method`            tinyint                                    not null comment '是否补偿源方法（0：false，1：true）',
+    `compensation_handler`          varchar(200)     default ''                not null comment '自定义补偿handler',
+    `compensation_error_handler`    varchar(200)     default ''                not null comment '自定义补偿失败handler',
+    `compensation_cluster`          varchar(20)      default ''                null comment '集群',
+    `compensation_status`           varchar(20)      default ''                null comment '补偿状态',
+    `compensation_count`            int              default 0                 not null comment '重试次数',
+    `compensation_limit_max`        int              default 0                 not null comment '限制次数',
+    `compensation_interval`         int              default 0                 not null comment '重试间隔',
+    `last_compensation_time`        datetime comment '最近补偿时间',
+    `next_compensation_time`        datetime comment '下次补偿时间',
+    `create_time`                   datetime         default CURRENT_TIMESTAMP not null comment '创建时间',
+    `last_update_time`              datetime         default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '最后更新时间',
+    `is_delete`                     tinyint unsigned default 0                  not null comment '是否删除（0：未删除，1：已删除）',
+    PRIMARY KEY (`id`),
+    key idx_compensation_status_and_next_time (compensation_status, next_compensation_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci  comment '补偿消息表' charset = utf8mb4;
+
+create table kafka_send_error_msg
+(
+    `id`                bigint unsigned auto_increment not null comment '主键' ,
+    `trace_id`          varchar(100) default ''                not null comment '消息序号',
+    `topic_name`        varchar(100) default ''                not null comment '目的队列名',
+    `template_name`     varchar(64)  default ''                not null comment '连接模板名',
+    `record_headers`    varchar(2000)    default ''                null comment '消息header',
+    `record_key`        varchar(200) default ''                not null comment 'key',
+    `record_value`      mediumtext                             null comment '消息体',
+    `send_status`       tinyint(1)   default 0                 not null comment '状态：0 待处理，1 已处理',
+    `retries`           int          default 0                 not null comment '重试次数',
+    `create_time`       datetime     default CURRENT_TIMESTAMP not null comment '创建时间',
+    `last_update_time`  datetime     default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    `is_delete`         tinyint(1)   default 0                 not null comment '是否删除',
+    primary key (id),
+    key idx_last_update_time (last_update_time),
+    key idx_status (send_status)
+)ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci comment 'kafka发送异常消息表' charset = utf8mb4;
+
+```
+
+
+## 动态启停消费者&调整concurrency(apollo配置)
 ### 1. 全局关闭调整消费者(最高优先级):
 | 配置项                                                 | 数据类型    | 默认值   | 描述                                   |
 |-----------------------------------------------------|---------|-------|--------------------------------------|
@@ -63,7 +120,7 @@ kafka辅助功能工具组件，基于springboot + apollo + mybatis-plus依赖
 | kafka-tool.adjust.${bizTag}.${topic}.enabled      | boolean  | true   | 控制 bizTag 下 topic 对应的 listener 是否强制开启，使用该配置将忽略${bizTag}.enabled的情况 |
 | kafka-tool.adjust.${bizTag}.${topic}.concurrency  | int      | 初始值  | 控制 listener container 的 concurrency。 0为关闭                                |
 
-## 自动补偿消费
+## 自动补偿消费/线程池增强消费
 
 Spring Kafka 在客户端实现了 Retry Topic 和 DLT （Dead Letter Topic，死信队列）这两个功能。(2.7.x 以下版本不支持 Retry Topic)
 这里与该功能的区别主要在于
@@ -76,10 +133,47 @@ kafka-tool:
     enabled: true
     kafka-clusters:
       # 这里即补偿集群的名称，@EnhancedKafkaListener对应的kafkaCluster名称
-      origin:
+      myCompensationCluster:
         bootstrap-servers: IP_ADDRESS:9092,IP_ADDRESS:9092,IP_ADDRESS:9092
         topic: 补偿队列topic名称
         group-id: 补偿队列的group
+```
+
+在@KafkaListener上添加注解`@EnhanceKafkaListener`，即可开启自动补偿消费。
+```java
+
+    @EnhanceKafkaListener(compensationType = CompensationTypeEnum.Kafka,kafkaCluster = "myCompensationCluster",compensateInterval = 20)
+    @KafkaListener(groupId = "myListener", topics = "topicB", containerFactory = "kafkaListenerContainerFactory")
+    public void listenDemo(List<ConsumerRecord<String,String>> recordList , Acknowledgment ack) {
+        ...
+    }
+```
+### 线程池增强消费
+对于分区数少的topic，使用线程池来提高单个消费者的消息消费速度。
+
+
+## 可靠发送
+
+这里的可靠发送指的是消息发送失败时，会自动保存至数据库kafka_send_error_msg。
+```java
+@Component
+public class KafkaSender {
+
+    @Resource
+    ReliableSender reliableSender;
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    public KafkaSender(KafkaTemplate<String, String> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    public void sendMessage(String topic, String message) {
+        ProducerRecord<String, String> record = new ProducerRecord<>(topic, message);
+//        kafkaTemplate.send(record);
+        reliableSender.send(kafkaTemplate, record);
+    }
+}
 ```
 
 
