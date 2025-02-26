@@ -1,0 +1,6 @@
+# Auto Configuration
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+  io.github.hkh.tool.kafka.config.KafkaToolImportConfiguration,\
+  io.github.hkh.tool.kafka.utils.SpringContextUtil
+org.springframework.context.ApplicationListener=\
+  io.github.hkh.tool.kafka.config.init.KafkaToolSpringInitListener
