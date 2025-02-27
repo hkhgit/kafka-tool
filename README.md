@@ -28,9 +28,14 @@ kafka辅助功能工具组件，基于springboot + apollo + mybatis-plus依赖
 > 
 > 2、**使用前请确认是否有mybatis-plus依赖**
 
-##初始化
+## 初始化
 ### 1. 引入依赖
 ```xml
+<dependency>
+    <groupId>io.github.hkh.tool</groupId>
+    <artifactId>kafka-tool</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
 ```
 ### 2. 初始化sql脚本(若只需动态调整功能，无需该脚本)
 ```sql
@@ -132,7 +137,7 @@ kafka-tool:
   compensate:
     enabled: true
     kafka-clusters:
-      # 这里即补偿集群的名称，@EnhancedKafkaListener对应的kafkaCluster名称
+      # 这里即补偿集群的名称，@EnhancedKafkaListener对应的kafkaCluster名称。支持多个集群
       myCompensationCluster:
         bootstrap-servers: IP_ADDRESS:9092,IP_ADDRESS:9092,IP_ADDRESS:9092
         topic: 补偿队列topic名称
@@ -150,6 +155,7 @@ kafka-tool:
 ```
 ### 线程池增强消费
 对于分区数少的topic，使用线程池来提高单个消费者的消息消费速度。
+在注解`@EnhanceKafkaListener`上，threadPoolName属性填写自定义注册的线程池beanName，即使用该线程池进行加速消费
 
 
 ## 可靠发送
